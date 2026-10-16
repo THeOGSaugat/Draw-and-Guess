@@ -1,0 +1,24 @@
+{
+  "name": "@draw-guess/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch --clear-screen=false src/index.ts --no-client",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json --noEmit",
+    "test": "tsx --test test/*.test.ts",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@draw-guess/shared": "^0.1.0",
+    "express": "^5.3.0",
+    "socket.io": "^4.8.4"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.6.5",
+    "socket.io-client": "^4.8.4",
+    "tsx": "^4.23.15"
+  }
+}

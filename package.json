@@ -1,0 +1,27 @@
+{
+  "name": "draw-and-guess",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Mobile-first multiplayer Draw & Guess browser game",
+  "workspaces": [
+    "shared",
+    "server",
+    "client"
+  ],
+  "engines": {
+    "node": ">=20.12"
+  },
+  "scripts": {
+    "dev": "npm run build -w shared && concurrently -k -n shared,server,client -c magenta,cyan,yellow \"npm run dev -w shared\" \"npm run dev -w server\" \"npm run dev -w client\"",
+    "build": "npm run build -w shared && npm run build -w server && npm run build -w client",
+    "typecheck": "npm run build -w shared && npm run typecheck -w server && npm run typecheck -w client",
+    "test": "npm run build -w shared && npm run test -w server",
+    "start": "npm run start -w server",
+    "test:e2e": "npm run build && node e2e/lobby.e2e.mjs"
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.6",
+    "typescript": "^7.0.2"
+  }
+}
