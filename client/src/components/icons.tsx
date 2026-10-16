@@ -88,3 +88,32 @@ export const SpinnerIcon = (p: IconProps) => (
     <path d="M12 3a9 9 0 1 0 9 9" />
   </Icon>
 );
+export const EraserIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="m7 21-4-4a2 2 0 0 1 0-2.8L13.2 4a2 2 0 0 1 2.8 0l4 4a2 2 0 0 1 0 2.8L10 21z" />
+    <path d="M7 21h14M9 11l6 6" />
+  </Icon>
+);
+export const TrashIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3" />
+  </Icon>
+);
+export const MenuIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <circle cx="12" cy="5" r="1.4" fill="currentColor" />
+    <circle cx="12" cy="12" r="1.4" fill="currentColor" />
+    <circle cx="12" cy="19" r="1.4" fill="currentColor" />
+  </Icon>
+);
+export const SendIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <path d="M4 12 20 4l-6 16-3-7z" fill="currentColor" fillOpacity={0.2} />
+  </Icon>
+);
+export const ClockIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <circle cx="12" cy="12" r="8.5" />
+    <path d="M12 7.5V12l3 2" />
+  </Icon>
+);

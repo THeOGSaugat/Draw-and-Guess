@@ -1,5 +1,15 @@
 @import 'tailwindcss';
 
+/* Side-by-side game layout: desktops, and phones/tablets held in landscape. */
+@custom-variant wide {
+  @media (min-width: 1024px) {
+    @slot;
+  }
+  @media (orientation: landscape) and (min-width: 600px) {
+    @slot;
+  }
+}
+
 @theme {
   --font-display: 'Fredoka', ui-rounded, 'SF Pro Rounded', system-ui, sans-serif;
   --font-sans: 'Nunito', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
@@ -93,6 +103,11 @@
   }
   .field[aria-invalid='true'] {
     @apply border-candy/80;
+  }
+  /* Set while the game screen is mounted: no page scroll, no pull-to-refresh while drawing. */
+  .game-active {
+    overflow: hidden;
+    overscroll-behavior: none;
   }
   .safe-px {
     padding-left: max(1rem, env(safe-area-inset-left));

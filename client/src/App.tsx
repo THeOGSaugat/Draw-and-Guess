@@ -4,7 +4,7 @@ import { Logo } from './components/Logo';
 import { Toast } from './components/Toast';
 import { Button } from './components/Button';
 import { abandonSavedSession, useGame } from './lib/gameStore';
-import { GameStartedScreen } from './screens/GameStartedScreen';
+import { GameScreen } from './screens/GameScreen';
 import { HomeScreen } from './screens/HomeScreen';
 import { LobbyScreen } from './screens/LobbyScreen';
 
@@ -17,7 +17,7 @@ export function App() {
       room.phase === 'lobby' ? (
         <LobbyScreen room={room} playerId={playerId} connection={connection} />
       ) : (
-        <GameStartedScreen room={room} playerId={playerId} connection={connection} />
+        <GameScreen room={room} playerId={playerId} connection={connection} />
       );
   } else if (restoring) {
     screen = (

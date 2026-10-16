@@ -16,7 +16,7 @@
     "dev": "npm run build -w shared && concurrently -k -n shared,server,client -c magenta,cyan,yellow \"npm run dev -w shared\" \"npm run dev -w server\" \"npm run dev -w client\"",
     "build": "npm run build -w shared && npm run build -w server && npm run build -w client",
     "typecheck": "npm run build -w shared && npm run typecheck -w server && npm run typecheck -w client",
-    "test": "npm run build -w shared && npm run test -w server",
+    "test": "npm run build -w shared && npm run test -w server && npm run test -w client",
     "start": "npm run start -w server",
     "test:e2e": "npm run build && node e2e/lobby.e2e.mjs"
   },

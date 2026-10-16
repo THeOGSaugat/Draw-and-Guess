@@ -1,6 +1,17 @@
 import { useSyncExternalStore } from 'react';
-import type { Ack, AckResult, ErrorCode, JoinedRoom, RoomSnapshot } from '@draw-guess/shared';
+import type {
+  Ack,
+  AckResult,
+  ChatMessage,
+  ChatResult,
+  ErrorCode,
+  JoinedRoom,
+  PrivateRoundInfo,
+  RoomSnapshot,
+} from '@draw-guess/shared';
+import { discardPendingDrawOps, flushDrawOps } from './drawSender';
 import { socket } from './socket';
+import { board } from './strokeBoard';
 import { loadSession, saveSession, setUrlRoomCode } from './storage';
 
 export type ConnectionStatus = 'connecting' | 'connected' | 'reconnecting';
@@ -18,7 +29,16 @@ export interface GameState {
   /** True while trying to reclaim a seat saved in this tab. */
   restoring: boolean;
   notice: Notice | null;
+  /** Latest private info; only meaningful when its roundId matches room.round.id. */
+  privateRound: PrivateRoundInfo | null;
+  chat: ChatMessage[];
+  /** Local clock time (ms) when the current round phase ends, derived from remainingMs. */
+  phaseDeadline: number | null;
+  /** Local clock time (ms) when round results give way to the next round / final results. */
+  advanceDeadline: number | null;
 }
+
+const CHAT_LIMIT = 100;
 
 export type ClientErrorCode = ErrorCode | 'OFFLINE' | 'TIMEOUT';
 export interface ClientError {
@@ -35,6 +55,10 @@ let state: GameState = {
   playerId: null,
   restoring: loadSession() !== null,
   notice: null,
+  privateRound: null,
+  chat: [],
+  phaseDeadline: null,
+  advanceDeadline: null,
 };
 const listeners = new Set<() => void>();
 let noticeId = 0;
@@ -90,17 +114,52 @@ function request<T>(send: (ack: Ack<T>) => void, onLate?: (result: AckResult<T>)
   });
 }
 
-function enterRoom({ room, playerId, sessionToken }: JoinedRoom): void {
+/** Applies a room snapshot, resetting the canvas when a new round begins. */
+function applyRoom(room: RoomSnapshot): Partial<GameState> {
+  const roundId = room.round?.id ?? null;
+  if (board.roundId !== roundId) {
+    discardPendingDrawOps();
+    board.reset(roundId);
+  }
+  const remaining = room.round?.remainingMs;
+  const advanceIn = room.match?.nextInMs;
+  return {
+    room,
+    phaseDeadline: remaining == null ? null : Date.now() + remaining,
+    advanceDeadline: advanceIn == null ? null : Date.now() + advanceIn,
+  };
+}
+
+function enterRoom({ room, playerId, sessionToken, game }: JoinedRoom): void {
   saveSession({ code: room.code, playerId, sessionToken });
   setUrlRoomCode(room.code);
-  setState({ room, playerId, restoring: false });
+  const patch = applyRoom(room);
+  // Catch up with a round in progress: canonical strokes, private info, and chat.
+  board.reset(room.round?.id ?? null, game?.strokes ?? []);
+  setState({
+    ...patch,
+    playerId,
+    restoring: false,
+    privateRound: game?.privateRound ?? null,
+    chat: game ? game.chat : state.chat,
+  });
 }
 
 /** Leaves the room locally. `keepCode` leaves the code in the URL so the home screen pre-fills it. */
 function exitRoom(keepCode: string | null = null): void {
   saveSession(null);
   setUrlRoomCode(keepCode);
-  setState({ room: null, playerId: null, restoring: false });
+  discardPendingDrawOps();
+  board.reset(null);
+  setState({
+    room: null,
+    playerId: null,
+    restoring: false,
+    privateRound: null,
+    chat: [],
+    phaseDeadline: null,
+    advanceDeadline: null,
+  });
 }
 
 /** A create/join the server applied after we had already reported a timeout. */
@@ -206,7 +265,24 @@ export async function startGameClient(): Promise<void> {
   });
 
   socket.on('room:state', (room) => {
-    if (state.room?.code === room.code) setState({ room });
+    if (state.room?.code === room.code) setState(applyRoom(room));
+  });
+
+  socket.on('round:private', (info) => {
+    if (state.room) setState({ privateRound: info });
+  });
+
+  socket.on('chat:message', (message) => {
+    if (!state.room) return;
+    setState({ chat: [...state.chat, message].slice(-CHAT_LIMIT) });
+  });
+
+  socket.on('draw:ops', ({ roundId, ops }) => {
+    if (state.room && board.roundId === roundId) board.apply(ops);
+  });
+
+  socket.on('draw:clear', ({ roundId }) => {
+    if (state.room && board.roundId === roundId) board.clear();
   });
 
   socket.on('session:replaced', () => {
@@ -248,4 +324,40 @@ export function startGame(): Promise<ActionResult<null>> {
 
 export function returnToLobby(): Promise<ActionResult<null>> {
   return request<null>((ack) => socket.emit('game:returnToLobby', ack));
+}
+
+/**
+ * Host skips the results countdown. If the countdown already moved the match on,
+ * the server answers INVALID_PHASE; that's the desired outcome, so it counts as success.
+ */
+export async function nextRound(): Promise<ActionResult<null>> {
+  const result = await request<null>((ack) => socket.emit('round:next', ack));
+  return !result.ok && result.error.code === 'INVALID_PHASE' ? { ok: true, data: null } : result;
+}
+
+export async function playAgain(): Promise<ActionResult<null>> {
+  const result = await request<null>((ack) => socket.emit('match:playAgain', ack));
+  return !result.ok && result.error.code === 'INVALID_PHASE' ? { ok: true, data: null } : result;
+}
+
+export function chooseWord(index: number): Promise<ActionResult<null>> {
+  return request<null>((ack) => socket.emit('round:chooseWord', { index }, ack));
+}
+
+export function sendChat(text: string): Promise<ActionResult<ChatResult>> {
+  return request<ChatResult>((ack) => socket.emit('chat:send', { text }, ack));
+}
+
+/** Clears locally right away, after sending any queued strokes so the server sees the same order. */
+export function clearCanvas(): Promise<ActionResult<null>> {
+  const roundId = board.roundId;
+  if (roundId === null) return Promise.resolve({ ok: true, data: null });
+  flushDrawOps();
+  board.clear();
+  return request<null>((ack) => socket.emit('draw:clear', { roundId }, ack));
+}
+
+/** Private info for the current round, if any. */
+export function currentPrivateRound(s: GameState): PrivateRoundInfo | null {
+  return s.privateRound && s.room?.round && s.privateRound.roundId === s.room.round.id ? s.privateRound : null;
 }

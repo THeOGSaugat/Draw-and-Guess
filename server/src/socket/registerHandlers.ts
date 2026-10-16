@@ -1,4 +1,5 @@
 import { gameError, type AckResult, type JoinedRoom } from '@draw-guess/shared';
+import { parseDrawOps } from '../game/drawing.js';
 import { RoomError } from '../rooms/RoomError.js';
 import type { RoomManager, Seat } from '../rooms/RoomManager.js';
 import { createRateLimiter } from './rateLimit.js';
@@ -6,6 +7,10 @@ import type { GameServer, GameSocket } from './types.js';
 import { asObject, readNickname, readRoomCode, readSessionToken } from './validate.js';
 
 const RATE_LIMIT = { events: 30, windowMs: 10_000 };
+/** Chat has its own, stricter limit on top of the general one. */
+const CHAT_RATE_LIMIT = { events: 5, windowMs: 5_000 };
+/** Clients flush drawing at most every ~40ms (25/s); this leaves headroom without allowing floods. */
+const DRAW_RATE_LIMIT = { events: 100, windowMs: 2_000 };
 
 export function registerSocketHandlers(io: GameServer, rooms: RoomManager): void {
   const broadcastRoom = (code: string) => {
@@ -17,6 +22,8 @@ export function registerSocketHandlers(io: GameServer, rooms: RoomManager): void
     socket.data.playerId = null;
     socket.data.roomCode = null;
     const allowEvent = createRateLimiter(RATE_LIMIT.events, RATE_LIMIT.windowMs);
+    const allowChat = createRateLimiter(CHAT_RATE_LIMIT.events, CHAT_RATE_LIMIT.windowMs);
+    const allowDraw = createRateLimiter(DRAW_RATE_LIMIT.events, DRAW_RATE_LIMIT.windowMs);
 
     /**
      * Runs a handler and always answers through the ack callback. Events
@@ -43,7 +50,12 @@ export function registerSocketHandlers(io: GameServer, rooms: RoomManager): void
       socket.data.roomCode = s.room.code;
       void socket.join(s.room.code);
       broadcastRoom(s.room.code);
-      return { room: rooms.toSnapshot(s.room), playerId: s.player.id, sessionToken: s.player.sessionToken };
+      return {
+        room: rooms.toSnapshot(s.room),
+        playerId: s.player.id,
+        sessionToken: s.player.sessionToken,
+        game: rooms.gameRestoreFor(s.room, s.player.id),
+      };
     };
 
     const leaveCurrentRoom = () => {
@@ -128,6 +140,66 @@ export function registerSocketHandlers(io: GameServer, rooms: RoomManager): void
         const { roomCode, playerId } = requireSeat();
         rooms.returnToLobby(roomCode, playerId);
         broadcastRoom(roomCode);
+        return null;
+      }),
+    );
+
+    socket.on('round:next', (ack: unknown) =>
+      respond(ack, () => {
+        const { roomCode, playerId } = requireSeat();
+        rooms.nextRound(roomCode, playerId);
+        broadcastRoom(roomCode);
+        return null;
+      }),
+    );
+
+    socket.on('match:playAgain', (ack: unknown) =>
+      respond(ack, () => {
+        const { roomCode, playerId } = requireSeat();
+        rooms.playAgain(roomCode, playerId);
+        broadcastRoom(roomCode);
+        return null;
+      }),
+    );
+
+    socket.on('round:chooseWord', (payload: unknown, ack: unknown) =>
+      respond(ack, () => {
+        const { roomCode, playerId } = requireSeat();
+        rooms.chooseWord(roomCode, playerId, asObject(payload).index);
+        broadcastRoom(roomCode);
+        return null;
+      }),
+    );
+
+    socket.on('chat:send', (payload: unknown, ack: unknown) =>
+      respond(ack, () => {
+        const { roomCode, playerId } = requireSeat();
+        if (!allowChat()) throw new RoomError('RATE_LIMITED');
+        const result = rooms.sendChat(roomCode, playerId, asObject(payload).text);
+        if (result.status === 'correct') broadcastRoom(roomCode);
+        return result;
+      }),
+    );
+
+    // Fire-and-forget: invalid or unauthorized batches are dropped without a reply.
+    socket.on('draw:ops', (payload: unknown) => {
+      const { roomCode, playerId } = socket.data;
+      if (!roomCode || !playerId || !allowDraw()) return;
+      try {
+        const parsed = parseDrawOps(payload);
+        const accepted = rooms.applyDrawOps(roomCode, playerId, socket.id, parsed);
+        if (accepted.length > 0) socket.to(roomCode).emit('draw:ops', { roundId: parsed.roundId, ops: accepted });
+      } catch (err) {
+        if (!(err instanceof RoomError)) console.error(`[socket ${socket.id}] draw:ops error`, err);
+      }
+    });
+
+    socket.on('draw:clear', (payload: unknown, ack: unknown) =>
+      respond(ack, () => {
+        const { roomCode, playerId } = requireSeat();
+        const roundId = asObject(payload).roundId;
+        rooms.clearCanvas(roomCode, playerId, socket.id, roundId);
+        socket.to(roomCode).emit('draw:clear', { roundId: roundId as number });
         return null;
       }),
     );

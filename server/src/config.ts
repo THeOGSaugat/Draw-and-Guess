@@ -38,6 +38,12 @@ export const config = {
   reconnectGraceMs: intFromEnv('RECONNECT_GRACE_MS', 30_000, 0, 10 * 60_000),
   /** How long a disconnected host stays host before the role moves to a connected player. */
   hostHandoffMs: intFromEnv('HOST_HANDOFF_MS', 10_000, 0, 10 * 60_000),
+  /** Time the drawer has to pick one of the three words. */
+  wordChoiceMs: intFromEnv('WORD_CHOICE_MS', 15_000, 1_000, 5 * 60_000),
+  /** Length of the drawing/guessing phase. */
+  drawTimeMs: intFromEnv('ROUND_DRAW_MS', 60_000, 1_000, 10 * 60_000),
+  /** How long round results stay up before the match moves on by itself. */
+  roundResultsMs: intFromEnv('ROUND_RESULTS_MS', 8_000, 1_000, 2 * 60_000),
   /** Built client served in production, if it exists. `--no-client` (used by `npm run dev`) disables it. */
   clientDistDir: process.argv.includes('--no-client')
     ? undefined

@@ -18,7 +18,7 @@ let url: string;
 const clients: Client[] = [];
 
 before(async () => {
-  app = createApp({ corsOrigins: [], maxPlayersPerRoom: 3, maxRooms: 50, reconnectGraceMs: 200, hostHandoffMs: 100 });
+  app = createApp({ corsOrigins: [], maxPlayersPerRoom: 3, maxRooms: 50, reconnectGraceMs: 200, hostHandoffMs: 100, wordChoiceMs: 5000, drawTimeMs: 5000, roundResultsMs: 5000 });
   await new Promise<void>((resolve) => app.httpServer.listen(0, '127.0.0.1', resolve));
   url = `http://127.0.0.1:${(app.httpServer.address() as AddressInfo).port}`;
 });
@@ -99,7 +99,7 @@ describe('socket flow', () => {
     assert.equal(errorCode(await emitRaw(bob, 'game:start')), 'NOT_HOST');
     const started = nextState(bob);
     ok(await emitRaw(alice, 'game:start'));
-    assert.equal((await started).phase, 'in-game');
+    assert.equal((await started).phase, 'choosing');
 
     const afterLeave = nextState(bob);
     ok(await emitRaw(alice, 'room:leave'));

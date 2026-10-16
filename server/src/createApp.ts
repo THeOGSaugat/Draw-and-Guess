@@ -14,8 +14,20 @@ export interface AppInstance {
   rooms: RoomManager;
 }
 
-type AppConfig = Pick<Config, 'corsOrigins' | 'maxPlayersPerRoom' | 'maxRooms' | 'reconnectGraceMs' | 'hostHandoffMs'> & {
+type AppConfig = Pick<
+  Config,
+  | 'corsOrigins'
+  | 'maxPlayersPerRoom'
+  | 'maxRooms'
+  | 'reconnectGraceMs'
+  | 'hostHandoffMs'
+  | 'wordChoiceMs'
+  | 'drawTimeMs'
+  | 'roundResultsMs'
+> & {
   clientDistDir?: string;
+  /** Word list override (tests). */
+  words?: readonly string[];
 };
 
 export function createApp(config: AppConfig): AppInstance {
@@ -35,9 +47,32 @@ export function createApp(config: AppConfig): AppInstance {
     maxRooms: config.maxRooms,
     reconnectGraceMs: config.reconnectGraceMs,
     hostHandoffMs: config.hostHandoffMs,
+    wordChoiceMs: config.wordChoiceMs,
+    drawTimeMs: config.drawTimeMs,
+    roundResultsMs: config.roundResultsMs,
+    words: config.words,
     onRoomChanged: (code) => {
       const room = rooms.getRoom(code);
       if (room) io.to(code).emit('room:state', rooms.toSnapshot(room));
+    },
+    onPrivateRound: (code, playerId) => {
+      const room = rooms.getRoom(code);
+      const socketId = room?.players.get(playerId)?.socketId;
+      const info = room && rooms.privateRoundFor(room, playerId);
+      if (socketId && info) io.to(socketId).emit('round:private', info);
+    },
+    onChat: (code, message, audience) => {
+      const room = rooms.getRoom(code);
+      if (!room) return;
+      if (audience === null) {
+        io.to(code).emit('chat:message', message);
+        return;
+      }
+      // Restricted messages go to each entitled player's own socket only.
+      const socketIds = audience
+        .map((id) => room.players.get(id)?.socketId)
+        .filter((id): id is string => typeof id === 'string');
+      if (socketIds.length > 0) io.to(socketIds).emit('chat:message', message);
     },
   });
 

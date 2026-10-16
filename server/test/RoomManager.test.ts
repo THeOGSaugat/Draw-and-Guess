@@ -6,7 +6,7 @@ import { RoomManager } from '../src/rooms/RoomManager.js';
 
 const managers: RoomManager[] = [];
 function makeManager(overrides: Partial<ConstructorParameters<typeof RoomManager>[0]> = {}) {
-  const m = new RoomManager({ maxPlayersPerRoom: 8, maxRooms: 100, reconnectGraceMs: 50, hostHandoffMs: 25, ...overrides });
+  const m = new RoomManager({ maxPlayersPerRoom: 8, maxRooms: 100, reconnectGraceMs: 50, hostHandoffMs: 25, wordChoiceMs: 5000, drawTimeMs: 5000, roundResultsMs: 5000, ...overrides });
   managers.push(m);
   return m;
 }
@@ -56,7 +56,7 @@ describe('RoomManager', () => {
     const { player: bob } = m.joinRoom(room.code, 'Bob', 's2');
     assertRoomError(() => m.startGame(room.code, bob.id), 'NOT_HOST');
     m.startGame(room.code, host.id);
-    assert.equal(room.phase, 'in-game');
+    assert.equal(room.phase, 'choosing');
     assertRoomError(() => m.joinRoom(room.code, 'Cara', 's3'), 'GAME_IN_PROGRESS');
     m.returnToLobby(room.code, host.id);
     assert.equal(room.phase, 'lobby');
