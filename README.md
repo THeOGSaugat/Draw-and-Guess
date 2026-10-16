@@ -4,7 +4,7 @@ A mobile-first multiplayer drawing and guessing game for the browser.
 
 **Current state: Phase 3 (full matches).** A player creates a room and invites friends. The host starts a **five-round match**: each round, one player draws a secret word while the others guess. The server scores every correct guess, shows round results, and after round five shows a final leaderboard with **Play Again** and **Return to Lobby**.
 
-Deployment is not set up yet (Phase 4).
+**Deployment:** the repo is ready to deploy to Render's free tier with one click-through (see [Deploying](#deploying-to-render-free)). The public URL is listed here once it's live: _not deployed yet_.
 
 ## Tech stack
 
@@ -47,8 +47,55 @@ Vite proxies `/socket.io` and `/api` to the server, so the browser only ever tal
 | `npm run test:e2e` | Builds, then plays lobby flows, drawing rounds and a full five-round match in headless Chrome. Set `CHROME_PATH` if Chrome isn't found, and `E2E_SHOTS=<dir>` to save screenshots |
 | `npm run build` | Production build of all three packages |
 | `npm start` | Runs the built server. It also serves `client/dist` on port 3001, so run `npm run build` first |
+| `E2E_URL=https://… node e2e/lobby.e2e.mjs` | Runs the same browser tests against an **already running** server (e.g. your public deployment). It waits for a sleeping server to wake, skips the local-only server-restart check, and fails on CORS/mixed-content browser errors |
 
 Health check: `GET /api/health` returns `{ status, uptimeSeconds, rooms, players, connections }`.
+
+## Deploying to Render (free)
+
+The server already serves the built client from the same origin, so **one Render web service hosts everything** (website + Socket.IO + health check). Same origin means no CORS configuration. Render terminates HTTPS and supports secure WebSockets (`wss://`); the client connects to whatever origin served the page, so it never uses `localhost` in production.
+
+**Why Render:** Fly.io no longer has a free tier, Railway's free credit is small, and Vercel/Netlify can't host a persistent Socket.IO server. Render's free web service supports WebSockets (checked against Render's docs, 2026-10-17).
+
+**Free-tier limits (read before inviting friends):**
+- The service **sleeps after 15 minutes without traffic** and takes **about a minute** to wake. The first visitor waits; the game shows a "server is waking up" message.
+- **Rooms and games live in memory.** When the service sleeps or redeploys, every room ends. Keep one tab open or play within a session; don't expect rooms to survive overnight.
+- 750 free instance hours per month per workspace (enough for one always-on service), one instance only, bandwidth counts against a monthly allowance.
+
+### Steps (you do these: they need your Render and GitHub accounts)
+
+1. **Push the code** (`render.yaml` must be on GitHub's `main`). See "What to commit" in BUILD_STATUS.md, or:
+   ```bash
+   git add -A && git status        # check that .env is NOT listed
+   git commit -m "Phase 4: deployment config"
+   git push
+   ```
+2. Sign in at <https://dashboard.render.com> with GitHub.
+3. **New → Blueprint**, pick your repo, branch `main`. Render reads [render.yaml](render.yaml) and shows one free web service, `draw-and-guess`. Click **Apply**. Render may ask you to add a payment method at this step. I couldn't verify whether the free plan requires one, so read the screen before continuing, and pick the free plan.
+4. Wait for the build (about 3–6 minutes). The service URL looks like `https://draw-and-guess.onrender.com` (Render adds a suffix if the name is taken).
+5. **Check it:** open `<url>/api/health` (expect `{"status":"ok",…}`), then open `<url>` and create a room.
+
+**Manual setup instead of the blueprint:** New → Web Service → your repo, Runtime *Node*, Instance *Free*, Region *Singapore*, then:
+
+| Setting | Value |
+| ------- | ----- |
+| Build command | `npm ci --include=dev && npm run build` |
+| Start command | `npm start` |
+| Health check path | `/api/health` |
+| Env var `NODE_VERSION` | `22` |
+| Env var `NODE_ENV` | `production` |
+
+`--include=dev` matters: the build needs TypeScript, Vite and Tailwind, which are dev dependencies and are skipped by a plain `npm install` when `NODE_ENV=production` (this was reproduced and fixed). Render provides `PORT` itself. **Leave `CORS_ORIGINS` and `VITE_SERVER_URL` unset.** No secrets are needed; never put real values in `.env.example` or commit `.env`.
+
+**Updating:** pushing to `main` redeploys automatically (`autoDeployTrigger: commit`). To redeploy by hand: Render dashboard → your service → *Manual Deploy*.
+
+**Test the live game from your computer** (needs Chrome and Node 22):
+```bash
+E2E_URL=https://YOUR-SERVICE.onrender.com node e2e/lobby.e2e.mjs
+```
+This plays a full room → draw → guess → five-round match → rematch flow against the public URL (the first run may spend a minute waking the server).
+
+**Optional: frontend and backend on different hosts.** Build the client with `VITE_SERVER_URL=https://your-server` (baked in at build time) and start the server with `CORS_ORIGINS=https://your-frontend` (exact origin, no trailing slash). This setup is tested locally (the browser suite passes with it, and fails with CORS errors if `CORS_ORIGINS` is missing), but it is not what `render.yaml` configures.
 
 ## Match rules
 
@@ -130,7 +177,7 @@ All settings live in a single root `.env`, which both the server and Vite read. 
 | -------- | ------- | ------- |
 | `PORT` | `3001` | Game server port (Vite proxies to it) |
 | `HOST` | `0.0.0.0` | Server bind address |
-| `CORS_ORIGINS` | *(empty)* | Comma-separated origins, only needed if the client is hosted on another origin |
+| `CORS_ORIGINS` | *(empty)* | Comma-separated **exact** origins, only for a frontend hosted on another origin (unset on Render) |
 | `MAX_PLAYERS_PER_ROOM` | `8` | Clamped to 2–8 |
 | `MAX_ROOMS` | `500` | Server-wide cap on simultaneous rooms |
 | `RECONNECT_GRACE_MS` | `30000` | How long a dropped player keeps their seat |
@@ -139,7 +186,7 @@ All settings live in a single root `.env`, which both the server and Vite read. 
 | `ROUND_DRAW_MS` | `60000` | Length of the drawing/guessing phase |
 | `ROUND_RESULTS_MS` | `8000` | How long round results stay up before the match moves on by itself |
 | `DEV_HOST` / `CLIENT_PORT` | `localhost` / `5173` | Vite dev server bind address and port |
-| `VITE_SERVER_URL` | *(empty)* | Absolute server URL when not same-origin |
+| `VITE_SERVER_URL` | *(empty)* | Absolute server URL when not same-origin; read at client **build** time (unset on Render) |
 
 ## Project structure
 
@@ -170,7 +217,8 @@ client/src/
   components/         DrawingCanvas, DrawingToolbar, ChatPanel, RoundOverlay (word choice + results),
                       FinalLeaderboard, RoundTimer, PlayerStrip (round counter + scores), GameMenu, …
 client/test/          stroke-board and batching tests
-e2e/                  dependency-free headless-Chrome tests (Chrome DevTools Protocol)
+e2e/                  dependency-free headless-Chrome tests (Chrome DevTools Protocol); can target a deployed URL
+render.yaml           Render blueprint: one free web service (build, start, health check)
 ```
 
 ## Architecture notes

@@ -3,6 +3,10 @@
 // separate player. Run with `npm run test:e2e` (builds first).
 //
 // Needs Google Chrome/Chromium. Set CHROME_PATH if it isn't auto-detected.
+//
+// Against a deployed game: E2E_URL=https://your-app.onrender.com node e2e/lobby.e2e.mjs
+// (uses that server instead of starting one; skips the server-restart check, waits for a
+// sleeping free-tier server to wake, and fails on CORS/mixed-content browser errors.)
 import { spawn } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -11,7 +15,8 @@ import { fileURLToPath } from 'node:url';
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const PORT = Number(process.env.E2E_PORT || 3999);
-const BASE = `http://127.0.0.1:${PORT}`;
+const EXTERNAL = Boolean(process.env.E2E_URL);
+const BASE = EXTERNAL ? process.env.E2E_URL.replace(/\/+$/, '') : `http://127.0.0.1:${PORT}`;
 const DEBUG_PORT = Number(process.env.E2E_DEBUG_PORT || 9339);
 const HOST_HANDOFF_MS = 600;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -49,6 +54,11 @@ async function waitFor(check, { timeout = 5000, interval = 100, message = 'condi
 // ── Server (production build: serves client + socket on one port) ─────────────
 let server = null;
 async function startServer() {
+  if (EXTERNAL) {
+    // A sleeping free-tier server can take a minute or more to wake up.
+    await waitFor(async () => (await fetch(`${BASE}/api/health`)).ok, { timeout: 180_000, interval: 2000, message: `${BASE}/api/health` });
+    return;
+  }
   if (!existsSync(join(root, 'client/dist/index.html')) || !existsSync(join(root, 'server/dist/index.js'))) {
     throw new Error('Build output missing. Run `npm run build` first (npm run test:e2e does this).');
   }
@@ -95,6 +105,8 @@ async function openPage({ width = 390, height = 844, context, sessionStorageSeed
   const { targetId } = await send('Target.createTarget', { url: 'about:blank', browserContextId });
   const { sessionId } = await send('Target.attachToTarget', { targetId, flatten: true });
   await send('Page.enable', {}, sessionId);
+  await send('Runtime.enable', {}, sessionId);
+  await send('Log.enable', {}, sessionId);
   await send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: width < 768 }, sessionId);
   await send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 }, sessionId);
   if (sessionStorageSeed) {
@@ -210,6 +222,8 @@ async function openPage({ width = 390, height = 844, context, sessionStorageSeed
 
 // ── Test runner ──────────────────────────────────────────────────────────────
 let failures = 0;
+/** Errors seen in any page's console during the run. */
+const browserErrors = [];
 async function step(name, fn) {
   try {
     await fn();
@@ -234,6 +248,7 @@ async function newPlayer(nickname, path = '/', opts) {
 try {
   await startServer();
   const version = await waitFor(async () => (await fetch(`http://127.0.0.1:${DEBUG_PORT}/json/version`)).json(), {
+    timeout: 30_000,
     message: 'Chrome DevTools',
   });
   ws = new WebSocket(version.webSocketDebuggerUrl);
@@ -243,6 +258,13 @@ try {
   });
   ws.addEventListener('message', (e) => {
     const msg = JSON.parse(e.data);
+    if (msg.method === 'Runtime.exceptionThrown') {
+      browserErrors.push(`exception: ${msg.params.exceptionDetails.exception?.description ?? msg.params.exceptionDetails.text}`);
+    } else if (msg.method === 'Log.entryAdded' && msg.params.entry.level === 'error') {
+      browserErrors.push(`${msg.params.entry.source}: ${msg.params.entry.text} ${msg.params.entry.url ?? ''}`.trim());
+    } else if (msg.method === 'Runtime.consoleAPICalled' && msg.params.type === 'error') {
+      browserErrors.push(`console.error: ${msg.params.args.map((a) => a.value ?? a.description ?? '').join(' ')}`);
+    }
     if (msg.id && pending.has(msg.id)) {
       pending.get(msg.id)(msg);
       pending.delete(msg.id);
@@ -503,8 +525,9 @@ try {
   await step(`host role moves to a connected player ~${HOST_HANDOFF_MS}ms after the host drops`, async () => {
     const seed = { 'dg:session': await alice.session() };
     await alice.close();
-    await bob.hasText('host lost connection', 3000);
-    await bob.hasText('Start Game', 3000);
+    const wait = EXTERNAL ? 20_000 : 3000; // deployed servers use the real 10s hand-off delay
+    await bob.hasText('host lost connection', wait);
+    await bob.hasText('Start Game', wait);
     // The old host comes back (same session) as a regular player.
     alice = await openPage({ sessionStorageSeed: seed });
     await alice.goto(`/?room=${code}`);
@@ -661,7 +684,8 @@ try {
   });
 
   console.log('Connection handling');
-  await step('server outage shows Reconnecting; restart returns home with code pre-filled', async () => {
+  if (EXTERNAL) console.log('  - skipped: server outage check (it restarts a local server)');
+  else await step('server outage shows Reconnecting; restart returns home with code pre-filled', async () => {
     await stopServer();
     await bob.hasText('Connection lost', 5000);
     expect((await bob.click('Start Game')) === 'disabled', 'Start should be disabled while offline');
@@ -674,11 +698,25 @@ try {
   console.error('E2E setup error:', err);
 } finally {
   ws?.close();
+  const chromeExited = new Promise((resolve) => chrome.once('exit', resolve));
   chrome.kill();
+  await Promise.race([chromeExited, sleep(5000)]);
   await stopServer().catch(() => {});
-  await sleep(200);
-  rmSync(profileDir, { recursive: true, force: true });
+  try {
+    // Chrome may still be flushing files for a moment after it exits.
+    rmSync(profileDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  } catch {
+    // A leftover temp profile is harmless; never let cleanup hide the test result.
+  }
 }
 
+// Browser errors: noisy ones are expected while the server is deliberately stopped (local only);
+// CORS and mixed-content problems are never acceptable.
+const serious = browserErrors.filter((m) => /CORS|Access-Control|mixed content|Content Security Policy/i.test(m));
+if (browserErrors.length) {
+  console.log(`\nBrowser console errors: ${browserErrors.length} (${serious.length} CORS/mixed-content)`);
+  for (const m of [...new Set(browserErrors)].slice(0, 5)) console.log(`  · ${m.slice(0, 200)}`);
+}
+if (serious.length) failures++;
 console.log(failures ? `\n${failures} e2e check(s) failed` : '\nAll e2e checks passed');
 process.exit(failures ? 1 : 0);

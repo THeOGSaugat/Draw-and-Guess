@@ -1,6 +1,8 @@
 # Build Status
 
-_Last updated: 2026-10-16. Phase 3: scoring, five-round matches, leaderboard and polish (on top of Phases 1–2)._
+_Last updated: 2026-10-17. Phase 4: deployment preparation (on top of Phases 1–3)._
+
+**Deployment status: prepared and verified locally, NOT yet deployed.** Creating the Render service needs your Render/GitHub login, which I can't do. Public URL: _pending_ (steps in [README → Deploying](README.md#deploying-to-render-free)).
 
 ## Phase 1 checklist
 
@@ -112,6 +114,72 @@ Each fix has a regression test (unit/integration or e2e) that was seen failing f
 - [x] **Lobby chat spam:** the server accepted chat in the lobby, which has no chat UI. It's now rejected (tested).
 - [x] Landscape phones got a tiny canvas in the stacked layout; landscape now uses the side-by-side layout.
 
+## Phase 4: deployment
+
+### Hosting choice (checked against provider docs on 2026-10-17)
+- **Render free web service (chosen).** Supports WebSockets and persistent Node processes. Limits: sleeps after 15 min without traffic, about 1 min to wake, 750 free instance hours/month, single instance, no persistent disk. Source: [Render free-tier docs](https://render.com/docs/free).
+- **Rejected:** Fly.io (no free tier for new customers; 2-hour/7-day trial), Railway (30-day $5 trial credit, then $1/month credit), Vercel/Netlify (no persistent WebSocket server).
+- **Why one service:** the server already serves the built client, so the game, Socket.IO and the health check share one HTTPS origin. This removes CORS from the default setup.
+
+### Production-readiness audit
+| Check | Result |
+| ----- | ------ |
+| Client uses a configurable backend URL | Yes: `VITE_SERVER_URL` (build time); blank = same origin |
+| Never connects to localhost in production | Verified: the built bundle has no hard-coded URL. It connects to the page's own origin (the only "localhost" strings are inside the socket.io library) |
+| Server uses the host's `PORT` | Yes. Verified by running with `PORT=10000` |
+| CORS allows the exact frontend origin | Yes, and nothing else. **New tests** (`server/test/cors.test.ts`): none by default; exact-origin allow-list; rejects look-alikes (`http://`, subdomains, suffix tricks); preflight works |
+| Socket.IO over HTTPS/WSS | Same-origin `io()` follows the page's scheme (`https` → `wss`). Not testable without a real HTTPS host: **needs your check on the live URL** |
+| Secrets not committed | No secrets exist yet. `.env` is git-ignored and untracked; `.env.example` has placeholders only. Secret scan of tracked files found nothing |
+| Health endpoint | `GET /api/health` works (also used as Render's health check) |
+| Production build | Works with `npm ci --include=dev && npm run build` |
+| Game features in production mode | Full browser suite (rooms, drawing, guessing, scoring, five-round match, rematch, reconnect) passes against a production-built server |
+
+### Issues found and fixed
+- **Build fails with `NODE_ENV=production`.** A plain `npm install` skips dev dependencies (TypeScript, Vite, Tailwind), so `npm run build` fails with `tsc: command not found`. Reproduced in a clean copy; fixed by using `npm ci --include=dev` in `render.yaml` (verified in a clean copy).
+- **First-visit wait on a sleeping free server** looked like a hang. The home and reconnect screens now say "The server may be waking up… up to a minute" after 6 seconds offline.
+- **Test-harness flaws** found while building the deployed-URL mode: Chrome start-up timeout too short, and a cleanup crash that hid the results summary. Both fixed.
+
+### New and changed files
+- `render.yaml`: Render blueprint (free web service, Singapore region, build/start/health check, Node 22)
+- `server/test/cors.test.ts`: 4 CORS regression tests
+- `e2e/lobby.e2e.mjs`: new `E2E_URL` mode (test a deployed server), captures browser console errors and fails on CORS/mixed-content
+- `client/src/lib/useSlowConnect.ts` + `HomeScreen.tsx` + `App.tsx`: "waking up" hint
+- `.env.example`: documented deployment placeholders. A private `.env` exists locally and is git-ignored.
+- `README.md`, `BUILD_STATUS.md`
+
+### What to commit (I have not committed or pushed anything)
+Review with `git status` and `git diff`, then commit everything above, for example:
+```bash
+git add -A && git status    # confirm .env is NOT in the list
+git commit -m "Phase 4: Render deployment config, CORS tests, deployed-URL e2e mode"
+git push
+```
+
+### Verification performed (Phase 4)
+- [x] `npm run typecheck`: clean
+- [x] `npm test`: **90/90** (86 server including 4 new CORS tests, 4 client)
+- [x] `npm run build`: succeeds
+- [x] `npm run test:e2e` (local server): **27/27**
+- [x] **Render-style clean-room run:** fresh copy of the project with no `node_modules` and no `.env`, `NODE_ENV=production npm ci --include=dev && npm run build`, started with `PORT=10000 npm start`:
+  - health, page, assets and unknown-API 404 respond correctly
+  - the full 27-check browser suite passes against it through the new `E2E_URL` mode
+- [x] **Split frontend/backend run:** client built with `VITE_SERVER_URL=http://127.0.0.1:10000` served from another origin (`:4173`). With `CORS_ORIGINS=http://127.0.0.1:4173` all checks pass. Without it, the suite fails with 42 "blocked by CORS policy" errors, proving the test catches the misconfiguration.
+- [x] `render.yaml` parses and its fields match [Render's blueprint docs](https://render.com/docs/blueprint-spec)
+- [ ] **Not done: the actual deployment and every check on the public URL** (create room from two networks, wss, live drawing, a five-round match, rematch, reconnect, backend logs). These need the deployment first, then your devices; see below.
+
+### What you need to do
+1. Commit and push (above), then follow [README → Deploying](README.md#deploying-to-render-free) (Render dashboard → New → Blueprint → Apply).
+2. Check `<url>/api/health`, then run `E2E_URL=<url> node e2e/lobby.e2e.mjs` from this project (needs Chrome and Node 22).
+3. **Manual two-device test:** on your phone (mobile data, not Wi-Fi) open the URL and create a room; on your computer join with the invite link. Check live drawing, a guess, and a full five-round match plus Play Again. Open Render's *Logs* tab while testing and watch for errors.
+4. Put the working URL at the top of README.md and in this file.
+
+### Limitations specific to this deployment
+- Free tier sleeps after 15 minutes idle; wake-up takes about a minute; **all rooms are lost on sleep or redeploy** (in-memory state).
+- A redeploy (any push to `main`) ends running games.
+- Single instance only (state is in memory), so the free tier is also the right architecture today.
+- No custom domain, analytics or rate limiting by IP; the game has no accounts.
+- Not verified: how Render's free plan treats long idle WebSocket connections during a quiet game (its docs say idle connections count as inactivity). Active play generates traffic every few seconds, so this should not matter in practice, but it hasn't been observed.
+
 ## Phase 3 checklist
 
 Match rules, the scoring formula, and the join/leave rules are documented in [README.md](README.md#match-rules).
@@ -207,7 +275,7 @@ Match rules, the scoring formula, and the join/leave rules are documented in [RE
 
 ## Known issues and limitations
 
-- **No deployment yet** (Phase 4). State is in memory only: a server restart ends all games, and in dev, editing server or shared code restarts the server.
+- **Deployment prepared but not yet performed** (see Phase 4). State is in memory only: a server restart ends all games, and in dev, editing server or shared code restarts the server.
 - **No late joins mid-match.** Players can join only in the lobby. A player whose seat expires mid-match must wait until the host returns to the lobby.
 - **Departed players aren't ranked.** Someone who leaves (or whose seat expires) before the end disappears from the final standings, even if they were leading. Their earlier points still show in past round results.
 - **The chat rate limit (5 messages per 5s) also applies to guesses.** Very fast guessers can see "slow down" and have to resend. This also slows brute-forcing the word list; there's no further anti-cheat.
@@ -223,5 +291,5 @@ Match rules, the scoring formula, and the join/leave rules are documented in [RE
 - **Network conditions:** high latency, packet loss, and many rooms at once (load).
 - **DPR changes after page load** (moving the window to another monitor): DevTools emulation can't fire the event this relies on.
 
-## Next: Phase 4 (not started)
-Deployment.
+## Next
+No phase planned. Possible follow-ups: persistence across restarts, late joins, real-device testing.

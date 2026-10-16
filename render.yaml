@@ -1,0 +1,22 @@
+# Render Blueprint: one free web service that serves both the game server (Express +
+# Socket.IO) and the built client from the same origin, so no CORS setup is needed.
+# Docs: https://render.com/docs/blueprint-spec
+services:
+  - type: web
+    name: draw-and-guess
+    runtime: node
+    plan: free
+    region: singapore # closest to Nepal; also available: oregon, ohio, virginia, frankfurt
+    # `--include=dev` is required: the build needs TypeScript/Vite/Tailwind (devDependencies),
+    # which plain `npm install` skips when NODE_ENV=production.
+    buildCommand: npm ci --include=dev && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    autoDeployTrigger: commit
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NODE_ENV
+        value: production
+      # Render provides PORT itself (10000); the server reads it. No other settings are needed:
+      # leave CORS_ORIGINS and VITE_SERVER_URL unset for this same-origin setup.

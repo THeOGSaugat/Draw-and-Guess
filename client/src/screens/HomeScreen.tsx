@@ -10,6 +10,7 @@ import {
   normalizeRoomCode,
 } from '@draw-guess/shared';
 import { Button } from '../components/Button';
+import { useSlowConnect } from '../lib/useSlowConnect';
 import { ConnectionBadge } from '../components/ConnectionBadge';
 import { ArrowRightIcon, PlusIcon } from '../components/icons';
 import { Logo } from '../components/Logo';
@@ -34,6 +35,7 @@ export function HomeScreen({ connection }: { connection: ConnectionStatus }) {
   const [codeError, setCodeError] = useState<string | null>(null);
   const [pending, setPending] = useState<'create' | 'join' | null>(null);
   const online = connection === 'connected';
+  const slowConnect = useSlowConnect(online);
 
   function validNickname(): string | null {
     const clean = normalizeNickname(nickname);
@@ -204,6 +206,11 @@ export function HomeScreen({ connection }: { connection: ConnectionStatus }) {
         {!online && (
           <p className="mt-4 text-center text-sm font-semibold text-slate-400">
             {connection === 'connecting' ? 'Connecting to the game server…' : "Can't reach the game server. Retrying…"}
+            {slowConnect && (
+              <span className="mt-1 block text-xs text-slate-500">
+                The server may be waking up after a quiet spell. The first visit can take up to a minute.
+              </span>
+            )}
           </p>
         )}
       </div>
